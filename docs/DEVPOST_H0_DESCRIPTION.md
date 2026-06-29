@@ -113,7 +113,7 @@ Every interaction is saved. A child can return days later and see their characte
 
 ## The AI Pipeline (All AWS)
 
-![Fablecraft AWS Architecture](https://github.com/Shyamistic/FableCraft/blob/main/docs/pictures/Architecture.png?raw=true)
+![Fablecraft AWS Architecture](https://github.com/Shyamistic/FableCraft/blob/main/submission-package/Architecture.png?raw=true)
 *Full AWS architecture — Vercel → EC2 FastAPI → DynamoDB, S3, Bedrock + Polly*
 
 ```
@@ -160,8 +160,8 @@ v0 let us go from concept to polished UI in minutes, then connect directly to a 
 
 ## Features That Make This Shippable
 
-![Scene Gameplay](https://github.com/Shyamistic/FableCraft/blob/main/docs/gifs/gif3-ezgif.com-video-to-gif-converter.gif?raw=true)
-*Interactive scene gameplay — choices, rewards, and narration*
+![Quest Flow](https://github.com/Shyamistic/FableCraft/blob/main/docs/gifs/gif2-ezgif.com-video-to-gif-converter.gif?raw=true)
+*Interactive 8-scene quest — choices, rewards, and AI narration powered by Amazon Bedrock*
 
 ### For Children (ages 4-8)
 - 🎨 Drawing canvas with magic brushes (rainbow, sparkle, glow, neon) + sticker stamps
