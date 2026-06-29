@@ -1,0 +1,14 @@
+[
+  {
+    "ParameterKey": "S3BucketName",
+    "ParameterValue": "fablecraft-assets"
+  },
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "production"
+  },
+  {
+    "ParameterKey": "CacheTTL",
+    "ParameterValue": "86400"
+  }
+]

@@ -1,0 +1,458 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Fablecraft Backend Infrastructure - ECS Fargate with Application Load Balancer.
+  Deploys the FastAPI backend behind an ALB with HTTPS termination.
+  Routes /api/* and /ws/* traffic to the ECS service.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: production
+    AllowedValues:
+      - production
+      - staging
+    Description: Deployment environment name
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID where resources will be deployed
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet::Id
+    Description: First public subnet for ALB
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet::Id
+    Description: Second public subnet for ALB
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet::Id
+    Description: First private subnet for ECS tasks
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet::Id
+    Description: Second private subnet for ECS tasks
+
+  CertificateArn:
+    Type: String
+    Description: ARN of the ACM certificate for HTTPS termination
+
+  ContainerImage:
+    Type: String
+    Description: Docker image URI for the backend container (e.g., 123456789.dkr.ecr.us-east-1.amazonaws.com/fablecraft-backend:latest)
+
+  DesiredCount:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    MaxValue: 10
+    Description: Number of ECS tasks to run
+
+  ContainerCpu:
+    Type: Number
+    Default: 512
+    AllowedValues:
+      - 256
+      - 512
+      - 1024
+      - 2048
+    Description: CPU units for the container (1 vCPU = 1024)
+
+  ContainerMemory:
+    Type: Number
+    Default: 1024
+    AllowedValues:
+      - 512
+      - 1024
+      - 2048
+      - 4096
+    Description: Memory (MB) for the container
+
+  AwsRegion:
+    Type: String
+    Default: us-east-1
+    Description: AWS region for services
+
+  S3BucketName:
+    Type: String
+    Default: fablecraft-assets
+    Description: S3 bucket name for asset storage
+
+  ParentPin:
+    Type: String
+    Default: '1234'
+    NoEcho: true
+    Description: Parent dashboard PIN
+
+Resources:
+  # ============================================
+  # Security Groups
+  # ============================================
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for the Application Load Balancer
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTPS from anywhere
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTP for redirect
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-alb-sg
+
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for ECS Fargate tasks
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: Allow traffic from ALB only
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-ecs-sg
+
+  # ============================================
+  # Application Load Balancer
+  # ============================================
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${EnvironmentName}-fablecraft-alb
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-fablecraft-alb
+
+  # HTTPS Listener - terminates TLS and routes /api/* to ECS
+  HTTPSListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      DefaultAction:
+        Type: fixed-response
+        FixedResponseConfig:
+          StatusCode: '404'
+          ContentType: text/plain
+          MessageBody: Not Found
+
+  # HTTP Listener - redirects to HTTPS
+  HTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultAction:
+        Type: redirect
+        RedirectConfig:
+          Protocol: HTTPS
+          Port: '443'
+          StatusCode: HTTP_301
+
+  # Listener Rule: Route /api/* to ECS target group
+  APIListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref HTTPSListener
+      Priority: 1
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - '/api/*'
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref BackendTargetGroup
+
+  # Listener Rule: Route /ws/* (WebSocket) to ECS target group
+  WSListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref HTTPSListener
+      Priority: 2
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - '/ws/*'
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref BackendTargetGroup
+
+  # Listener Rule: Route /health to ECS target group
+  HealthListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref HTTPSListener
+      Priority: 3
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - '/health'
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref BackendTargetGroup
+
+  # Target Group for ECS tasks
+  BackendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${EnvironmentName}-backend-tg
+      Port: 8080
+      Protocol: HTTP
+      VpcId: !Ref VpcId
+      TargetType: ip
+      HealthCheckEnabled: true
+      HealthCheckPath: /health
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: '200'
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+        # Enable stickiness for WebSocket support
+        - Key: stickiness.enabled
+          Value: 'true'
+        - Key: stickiness.type
+          Value: lb_cookie
+        - Key: stickiness.lb_cookie.duration_seconds
+          Value: '3600'
+
+  # ============================================
+  # ECS Cluster and Service
+  # ============================================
+
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub ${EnvironmentName}-fablecraft-cluster
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+
+  # IAM Role for ECS Task Execution (pulling images, writing logs)
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-ecs-task-execution-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  # IAM Role for ECS Task (application permissions - S3, Bedrock, Polly)
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-ecs-task-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: FablecraftTaskPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: S3Access
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::${S3BucketName}
+                  - !Sub arn:aws:s3:::${S3BucketName}/*
+              - Sid: BedrockAccess
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: '*'
+              - Sid: PollyAccess
+                Effect: Allow
+                Action:
+                  - polly:SynthesizeSpeech
+                Resource: '*'
+              - Sid: CloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+
+  # CloudWatch Log Group
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${EnvironmentName}-fablecraft-backend
+      RetentionInDays: 30
+
+  # ECS Task Definition
+  BackendTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${EnvironmentName}-fablecraft-backend
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: !Ref ContainerCpu
+      Memory: !Ref ContainerMemory
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+      ContainerDefinitions:
+        - Name: fablecraft-backend
+          Image: !Ref ContainerImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8080
+              Protocol: tcp
+          Environment:
+            - Name: PORT
+              Value: '8080'
+            - Name: AWS_REGION
+              Value: !Ref AwsRegion
+            - Name: S3_BUCKET_NAME
+              Value: !Ref S3BucketName
+            - Name: PARENT_PIN
+              Value: !Ref ParentPin
+            - Name: DEBUG
+              Value: 'false'
+            - Name: APP_NAME
+              Value: fablecraft
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AwsRegion
+              awslogs-stream-prefix: backend
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - curl -f http://localhost:8080/health || exit 1
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 10
+
+  # ECS Service
+  BackendService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - HTTPSListener
+      - APIListenerRule
+    Properties:
+      ServiceName: !Sub ${EnvironmentName}-fablecraft-backend
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref BackendTaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+      LoadBalancers:
+        - ContainerName: fablecraft-backend
+          ContainerPort: 8080
+          TargetGroupArn: !Ref BackendTargetGroup
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 50
+        MaximumPercent: 200
+      DeploymentCircuitBreaker:
+        Enable: true
+        Rollback: true
+
+  # ============================================
+  # Auto Scaling
+  # ============================================
+
+  AutoScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: 10
+      MinCapacity: !Ref DesiredCount
+      ResourceId: !Sub service/${ECSCluster}/${BackendService.Name}
+      RoleARN: !Sub arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  AutoScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub ${EnvironmentName}-backend-cpu-scaling
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref AutoScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        TargetValue: 70.0
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 60
+
+# ============================================
+# Outputs
+# ============================================
+
+Outputs:
+  ALBDnsName:
+    Description: DNS name of the Application Load Balancer
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+    Export:
+      Name: !Sub ${EnvironmentName}-ALBDnsName
+
+  ALBUrl:
+    Description: HTTPS URL of the Application Load Balancer
+    Value: !Sub https://${ApplicationLoadBalancer.DNSName}
+
+  ECSClusterName:
+    Description: Name of the ECS cluster
+    Value: !Ref ECSCluster
+
+  ECSServiceName:
+    Description: Name of the ECS service
+    Value: !GetAtt BackendService.Name
+
+  BackendTargetGroupArn:
+    Description: ARN of the backend target group
+    Value: !Ref BackendTargetGroup

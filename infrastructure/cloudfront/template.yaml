@@ -1,0 +1,167 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CloudFront CDN distribution for Fablecraft asset delivery.
+  Serves generated images, audio files, and user drawings from S3 via CloudFront
+  with Cache-Control max-age >= 3600 seconds.
+  Validates: Requirement 13.6
+
+Parameters:
+  S3BucketName:
+    Type: String
+    Default: fablecraft-assets
+    Description: Name of the S3 bucket storing generated assets
+
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues:
+      - production
+      - staging
+    Description: Deployment environment
+
+  CacheTTL:
+    Type: Number
+    Default: 86400
+    MinValue: 3600
+    Description: >
+      Default cache TTL in seconds for CloudFront (minimum 3600s per requirement 13.6).
+      Objects with Cache-Control headers will use their specified max-age instead.
+
+Resources:
+  # Origin Access Control for secure S3 access
+  CloudFrontOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${S3BucketName}-oac'
+        Description: OAC for Fablecraft S3 asset bucket
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # CloudFront Distribution
+  AssetDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub 'Fablecraft asset CDN (${Environment})'
+        DefaultRootObject: ''
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+
+        Origins:
+          - Id: S3Origin
+            DomainName: !Sub '${S3BucketName}.s3.amazonaws.com'
+            OriginAccessControlId: !GetAtt CloudFrontOAC.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          # Use CachingOptimized managed policy with origin Cache-Control headers
+          CachePolicyId: !Ref AssetCachePolicy
+          ResponseHeadersPolicyId: !Ref AssetResponseHeadersPolicy
+
+        # Custom error responses for missing assets
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 404
+            ResponsePagePath: ''
+            ErrorCachingMinTTL: 60
+          - ErrorCode: 404
+            ErrorCachingMinTTL: 60
+
+        Restrictions:
+          GeoRestriction:
+            RestrictionType: none
+
+  # Custom Cache Policy ensuring minimum 3600s TTL
+  AssetCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: !Sub 'fablecraft-asset-cache-policy-${Environment}'
+        Comment: >
+          Cache policy for Fablecraft assets. Minimum TTL 3600s ensures
+          all assets are cached at edge for at least 1 hour (Req 13.6).
+          Objects with Cache-Control: public, max-age=3600 from S3 origin
+          will be honored.
+        DefaultTTL: !Ref CacheTTL
+        MinTTL: 3600
+        MaxTTL: 31536000
+        ParametersInCacheKeyAndForwardedToOrigin:
+          EnableAcceptEncodingGzip: true
+          EnableAcceptEncodingBrotli: true
+          HeadersConfig:
+            HeaderBehavior: none
+          CookiesConfig:
+            CookieBehavior: none
+          QueryStringsConfig:
+            QueryStringBehavior: none
+
+  # Response Headers Policy adding Cache-Control if missing
+  AssetResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub 'fablecraft-response-headers-${Environment}'
+        Comment: Ensures Cache-Control headers on all responses
+        CustomHeadersConfig:
+          Items:
+            - Header: X-Content-Type-Options
+              Value: nosniff
+              Override: true
+            - Header: X-Frame-Options
+              Value: DENY
+              Override: true
+
+  # S3 Bucket Policy granting CloudFront OAC access
+  AssetBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3BucketName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontServicePrincipalReadOnly
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub 'arn:aws:s3:::${S3BucketName}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${AssetDistribution}'
+
+Outputs:
+  DistributionId:
+    Description: CloudFront Distribution ID
+    Value: !Ref AssetDistribution
+    Export:
+      Name: !Sub '${AWS::StackName}-DistributionId'
+
+  DistributionDomainName:
+    Description: >
+      CloudFront domain name. Set this as CLOUDFRONT_DOMAIN in .env
+      to enable CloudFront URL generation in the storage service.
+    Value: !GetAtt AssetDistribution.DomainName
+    Export:
+      Name: !Sub '${AWS::StackName}-DomainName'
+
+  CachePolicyId:
+    Description: Cache Policy ID
+    Value: !Ref AssetCachePolicy
+
+  OACId:
+    Description: Origin Access Control ID
+    Value: !GetAtt CloudFrontOAC.Id

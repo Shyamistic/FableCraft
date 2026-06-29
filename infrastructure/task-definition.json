@@ -1,0 +1,55 @@
+{
+  "family": "fablecraft-backend",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/production-ecs-task-execution-role",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/production-ecs-task-role",
+  "containerDefinitions": [
+    {
+      "name": "fablecraft-backend",
+      "image": "ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/fablecraft-backend:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8080,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        { "name": "PORT", "value": "8080" },
+        { "name": "AWS_REGION", "value": "us-east-1" },
+        { "name": "S3_BUCKET_NAME", "value": "fablecraft-assets" },
+        { "name": "DEBUG", "value": "false" },
+        { "name": "APP_NAME", "value": "fablecraft" },
+        { "name": "PYTHONUNBUFFERED", "value": "1" }
+      ],
+      "secrets": [
+        {
+          "name": "OPENROUTER_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:ACCOUNT_ID:secret:fablecraft/openrouter-api-key"
+        },
+        {
+          "name": "PARENT_PIN",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:ACCOUNT_ID:secret:fablecraft/parent-pin"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/production-fablecraft-backend",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "backend"
+        }
+      },
+      "healthCheck": {
+        "command": ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 10
+      }
+    }
+  ]
+}

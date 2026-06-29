@@ -1,0 +1,102 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+
+# Hypothesis (property-based testing data)
+.hypothesis/
+**/.hypothesis/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# Environment Variables - CRITICAL: Never commit these!
+.env
+.env.local
+.env.*.local
+**/.env
+**/.env.local
+agents_service/.env
+frontend/.env.local
+*.env
+!.env.example
+!.env.local.example
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/.terraform.lock.hcl
+
+# Node
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Cloud credentials - NEVER commit these!
+**/application_default_credentials.json
+**/*-key.json
+**/*-credentials.json
+service-account-key.json
+gcloud-service-key.json
+
+# API Keys and Secrets
+**/secrets/
+**/*.pem
+**/*.key
+**/*.secret
+
+# Kiro IDE specs (development-only)
+.kiro/
+
+# Vercel
+.vercel/
+frontend/.vercel/
+
+# Pytest cache
+.pytest_cache/
+**/.pytest_cache/
+
+# Root-level pencils duplicate (already in frontend/public/pencils/)
+/pencils/
