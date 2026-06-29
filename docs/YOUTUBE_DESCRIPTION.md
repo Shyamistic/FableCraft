@@ -12,6 +12,7 @@ Fablecraft transforms children's drawings into personalized, interactive story a
 
 🔗 Live Demo: https://fablecraft-pi.vercel.app
 💻 GitHub: https://github.com/Shyamistic/FableCraft
+🎬 Video: https://youtu.be/NEK5weMjHb4
 📋 Track: Monetizable B2C App
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
